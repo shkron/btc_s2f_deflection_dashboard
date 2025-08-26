@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Bitcoin S2F — Price, Model & Deflection</title>
+<style>
+  :root { --bg:#0b0e14; --card:#141a23; --text:#e6e6e6; --muted:#9aa4b2; --accent:#1f7aec; }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,sans-serif}
+  header{padding:20px 16px;border-bottom:1px solid #1f2937}
+  h1{margin:0;font-size:20px}
+  .wrap{max-width:1200px;margin:0 auto;padding:16px}
+  .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+  .card{background:var(--card);border:1px solid #202938;border-radius:10px;padding:14px;min-height:88px}
+  .label{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
+  .value{font-size:22px;margin-top:6px;font-weight:600}
+  .row{margin-top:18px}
+  /* Taller, fixed-height containers + touch pan */
+  .chart-box{background:#0f1420;border:1px solid #202938;border-radius:10px;padding:10px;height:560px;touch-action:none}
+  .chart-box.small{height:420px}
+  .chart-box canvas{width:100% !important;height:100% !important;cursor:grab}
+  .chart-box.dragging canvas{cursor:grabbing}
+  a{color:#9dd1ff}
+  footer{color:var(--muted);padding:24px 16px}
+  .small{font-size:12px;color:#9dd1ff}
+  .controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:10px 0 0 2px}
+  input[type="number"],input[type="text"]{width:140px;background:#0f1420;border:1px solid #293548;border-radius:6px;color:#d8dee9;padding:6px}
+  button{background:var(--accent);border:0;color:white;border-radius:7px;padding:8px 12px;cursor:pointer}
+  button.ghost{background:transparent;border:1px solid #2a3a52;color:#cfe2ff}
+  button.icon{width:28px;height:28px;border-radius:999px;padding:0;display:inline-flex;align-items:center;justify-content:center;font-weight:700}
+  button:disabled{opacity:.6;cursor:not-allowed}
+  #status{margin-top:8px}
+  .toolbar{display:flex;gap:8px;align-items:center;margin:8px 0;flex-wrap:wrap}
+  .title{font-weight:700;margin-right:4px}
+  /* Modal */
+  .modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;z-index:1000}
+  .modal{width:min(640px,90vw);background:#0f1420;border:1px solid #263246;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.5)}
+  .modal header{border:0;padding:14px 16px 0}
+  .modal .content{padding:0 16px 16px;color:#d8dee9}
+  .modal .actions{display:flex;justify-content:flex-end;gap:8px;padding:0 16px 16px}
+  .modal .close{background:#2a3a52}
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <h1>Bitcoin Stock-to-Flow (S2F) — Price, Model &amp; Deflection</h1>
+    <div class="small">
+      Wheel/pinch to zoom • drag to pan • double-click or “Reset” to restore • A/B tweak model.
+    </div>
+    <div class="controls">
+      <div class="small">Adjust coefficients (optional):</div>
+      <label class="small">A <input id="coefA" type="number" step="0.01" value="3.3"></label>
+      <label class="small">B <input id="coefB" type="number" step="0.1" value="14.6"></label>
+      <label class="small">CoinGecko API key (optional): <input id="cgKey" type="text" placeholder="paste key here"></label>
+      <button id="reload">Reload</button>
+      <span id="updated" class="small"></span>
+      <div id="status" class="small"></div>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="grid" id="tiles">
+    <div class="card"><div class="label">BTC / USD (spot)</div><div class="value" id="tilePrice">—</div></div>
+    <div class="card"><div class="label">S2F (today)</div><div class="value" id="tileS2F">—</div></div>
+    <div class="card"><div class="label">Model price</div><div class="value" id="tileModel">—</div></div>
+    <div class="card"><div class="label">Deflection (Price ÷ Model)</div><div class="value" id="tileDefl">—</div></div>
+  </section>
+
+  <section class="row">
+    <div class="toolbar">
+      <span class="title">BTC vs S2F Model</span>
+      <button class="icon ghost" aria-label="About BTC vs S2F" data-modal="aboutPrice">ⓘ</button>
+      <button id="pPanLeft" class="ghost">← Pan</button>
+      <button id="pPanRight" class="ghost">Pan →</button>
+      <button id="pZoomIn">Zoom +</button>
+      <button id="pZoomOut">Zoom −</button>
+      <button id="pReset" class="ghost">Reset</button>
+      <span class="small">Drag • Wheel/pinch • Double-click to reset • Arrow keys pan</span>
+    </div>
+    <div class="chart-box" id="priceBox"><canvas id="chartPrice"></canvas></div>
+  </section>
+
+  <section class="row">
+    <div class="toolbar">
+      <span class="title">S2F Deflection</span>
+      <button class="icon ghost" aria-label="About S2F Deflection" data-modal="aboutDefl">ⓘ</button>
+      <button id="dPanLeft" class="ghost">← Pan</button>
+      <button id="dPanRight" class="ghost">Pan →</button>
+      <button id="dZoomIn">Zoom +</button>
+      <button id="dZoomOut">Zoom −</button>
+      <button id="dReset" class="ghost">Reset</button>
+      <span class="small">Drag • Wheel/pinch • Double-click to reset • Arrow keys pan</span>
+    </div>
+    <div class="chart-box small" id="deflBox"><canvas id="chartDefl"></canvas></div>
+  </section>
+</main>
+
+<footer class="wrap">
+  <div class="small" style="color:#9aa4b2">
+    Notes: S2F = stock ÷ annual flow. Annual flow uses reward × 144 × 365 per epoch. Supply anchored at halving totals (10.5m, 15.75m, 18.375m, 19.6875m).
+    Model MV = exp(A·ln(S2F)+B); price = MV / supply. Research only.
+  </div>
+</footer>
+
+<!-- Modal Backdrop -->
+<div class="modal-backdrop" id="modalBackdrop" role="dialog" aria-modal="true" aria-hidden="true">
+  <div class="modal" role="document">
+    <header><h2 id="modalTitle" class="small" style="font-size:16px;color:#cfe2ff;margin:0 0 8px">About</h2></header>
+    <div id="modalContent" class="content">—</div>
+    <div class="actions"><button class="close" id="modalClose">Close</button></div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+const fmt = new Intl.NumberFormat(undefined, {maximumFractionDigits: 2});
+const fmt0 = new Intl.NumberFormat(undefined, {maximumFractionDigits: 0});
+const fmt4 = new Intl.NumberFormat(undefined, {maximumFractionDigits: 4});
+
+let coefA = 3.3, coefB = 14.6;
+let priceChart = null, deflChart = null;
+
+const statusEl = document.getElementById('status');
+const setStatus = (m,err=false)=>{ statusEl.textContent = (err?'Error: ':'')+m; statusEl.style.color = err?'#ff8e8e':'#9dd1ff'; };
+
+// ---------- SUPPLY / S2F ----------
+const addDays=(d,n)=>{ const dt=new Date(d); dt.setUTCDate(dt.getUTCDate()+n); return dt; };
+const daysBetween=(a,b)=> Math.round((Date.parse(b)-Date.parse(a))/(1000*60*60*24));
+function buildSupplySeries(startStr, endStr){
+  const dates=[], supply=[], reward=[], annualFlow=[], s2f=[];
+  const blocksPerDay = 144, flowFromReward = r => r*blocksPerDay*365;
+  const epochs = [
+    {start:"2009-01-03", end:"2012-11-28", reward:50,   stockStart:0,        stockEnd:10500000},
+    {start:"2012-11-28", end:"2016-07-09", reward:25,   stockStart:10500000, stockEnd:15750000},
+    {start:"2016-07-09", end:"2020-05-11", reward:12.5, stockStart:15750000, stockEnd:18375000},
+    {start:"2020-05-11", end:"2024-04-20", reward:6.25, stockStart:18375000, stockEnd:19687500},
+    {start:"2024-04-20", end:endStr,       reward:3.125,stockStart:19687500, stockEnd:null}
+  ];
+  let cur = new Date(startStr+"T00:00:00Z"), end = new Date(endStr+"T00:00:00Z");
+  while (cur <= end){
+    let ep = epochs.find(e => Date.parse(e.start+"T00:00:00Z") <= cur && cur < Date.parse(e.end+"T00:00:00Z")) || epochs[epochs.length-1];
+    let sup;
+    if (ep.stockEnd !== null){
+      const nDays = Math.max(1, daysBetween(ep.start, ep.end));
+      const dayIndex = Math.max(0, Math.min(daysBetween(ep.start, cur.toISOString().slice(0,10)), nDays));
+      const mintedPerDay = (ep.stockEnd - ep.stockStart) / nDays;
+      sup = ep.stockStart + dayIndex * mintedPerDay;
+    } else {
+      const dayIndex = Math.max(0, daysBetween(ep.start, cur.toISOString().slice(0,10)));
+      sup = ep.stockStart + dayIndex * ep.reward * 144;
+    }
+    const r = ep.reward, af = flowFromReward(r);
+    dates.push(cur.toISOString().slice(0,10));
+    supply.push(sup); reward.push(r); annualFlow.push(af); s2f.push(Math.max(1e-9, sup/af));
+    cur = addDays(cur, 1);
+  }
+  return {dates, supply, reward, annualFlow, s2f};
+}
+
+// ---------- PRICE PROVIDERS ----------
+async function fetchCoinCap(){
+  const start = Date.UTC(2013,0,1), end = Date.now();
+  const res = await fetch(`https://api.coincap.io/v2/assets/bitcoin/history?interval=d1&start=${start}&end=${end}`);
+  if (!res.ok) throw new Error(`CoinCap HTTP ${res.status}`);
+  const json = await res.json();
+  if (!json || !Array.isArray(json.data)) throw new Error('CoinCap: unexpected payload');
+  const out = json.data.map(d => ({date:new Date(+d.time), price:+d.priceUsd})).filter(x=>x.price>0);
+  if (out.length < 100) throw new Error('CoinCap: too few points');
+  return {source:'CoinCap', data: out};
+}
+async function fetchCryptoCompare(){
+  const res = await fetch('https://min-api.cryptocompare.com/data/v2/histoday?fsym=BTC&tsym=USD&allData=true');
+  if (!res.ok) throw new Error(`CryptoCompare HTTP ${res.status}`);
+  const json = await res.json();
+  if (!json || !json.Data || !Array.isArray(json.Data.Data)) throw new Error('CryptoCompare: unexpected payload');
+  const out = json.Data.Data.map(d => ({date:new Date(d.time*1000), price:+d.close})).filter(x=>x.price>0);
+  if (out.length < 100) throw new Error('CryptoCompare: too few points');
+  return {source:'CryptoCompare', data: out};
+}
+async function fetchBinance(){
+  let start = Date.UTC(2017,0,1); const out=[];
+  while (start < Date.now()){
+    const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1d&startTime=${start}&limit=1000`);
+    if (!res.ok) throw new Error(`Binance HTTP ${res.status}`);
+    const arr = await res.json(); if (!Array.isArray(arr) || arr.length===0) break;
+    for (const k of arr){ out.push({date:new Date(k[0]), price:+k[4]}); }
+    const lastOpen = arr[arr.length-1][0]; start = lastOpen + 86400000; if (arr.length < 1000) break;
+  }
+  if (out.length < 100) throw new Error('Binance: too few points');
+  return {source:'Binance (BTCUSDT)', data: out};
+}
+async function fetchCoinGecko(optionalKey){
+  const headers = {};
+  if (optionalKey && optionalKey.trim()){
+    headers['x-cg-pro-api-key'] = optionalKey.trim();
+    headers['x-cg-demo-api-key'] = optionalKey.trim();
+  }
+  const res = await fetch('https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=max&precision=2',{headers});
+  if (!res.ok) throw new Error(`CoinGecko HTTP ${res.status}`);
+  const data = await res.json();
+  if (!data || !Array.isArray(data.prices)) throw new Error('CoinGecko: unexpected payload');
+  const out = data.prices.map(p => ({date:new Date(p[0]), price:+p[1]})).filter(x=>x.price>0);
+  if (out.length < 100) throw new Error('CoinGecko: too few points');
+  return {source: optionalKey ? 'CoinGecko (key)' : 'CoinGecko', data: out};
+}
+async function getPriceHistory(){
+  const key = document.getElementById('cgKey').value;
+  const attempts = [ ()=> key ? fetchCoinGecko(key) : Promise.reject(new Error('skip cg (no key)')),
+    fetchCoinCap, fetchCryptoCompare, fetchBinance, ()=> fetchCoinGecko(key) ];
+  const errors=[];
+  for (const fn of attempts){ try { return await fn(); } catch(e){ errors.push(e.message); } }
+  throw new Error('All providers failed:\n'+errors.join('\n'));
+}
+
+// ---------- PAN & ZOOM (fully custom) ----------
+function clamp(v, lo, hi){ return Math.max(lo, Math.min(hi, v)); }
+function getRange(chart){
+  const x = chart.scales.x, N = chart.data.labels.length-1;
+  const min = (typeof x.min==='number') ? x.min : 0;
+  const max = (typeof x.max==='number') ? x.max : N;
+  return {min,max,N};
+}
+function setRange(chart, min, max){
+  chart.options.scales.x.min = min;
+  chart.options.scales.x.max = max;
+  chart.update('none');
+}
+function panByPixels(chart, dxPx){
+  const x = chart.scales.x; const {min,max,N} = getRange(chart);
+  const span = max - min; const pxSpan = (x.right - x.left) || 1;
+  const dv = -dxPx * (span / pxSpan);
+  let nmin = min + dv, nmax = max + dv;
+  if (nmin < 0){ const s = -nmin; nmin+=s; nmax+=s; }
+  if (nmax > N){ const s = nmax - N; nmin-=s; nmax-=s; }
+  setRange(chart, nmin, nmax);
+}
+function zoomAtPixel(chart, factor, clientX){
+  const x = chart.scales.x; const {min,max,N} = getRange(chart);
+  const span = max - min; const pxSpan = (x.right - x.left) || 1;
+  const cx = clamp(clientX - x.left, 0, pxSpan);
+  const frac = cx / pxSpan;
+  const newSpan = clamp(span / factor, 5, N);
+  let nmin = min + (span - newSpan)*frac;
+  let nmax = nmin + newSpan;
+  if (nmin < 0){ nmin = 0; nmax = newSpan; }
+  if (nmax > N){ nmax = N; nmin = N - newSpan; }
+  setRange(chart, nmin, nmax);
+}
+function attachInteractions(chart, boxEl){
+  const canvas = chart.canvas;
+  // drag-pan
+  let dragging=false, lastX=0;
+  const start=(x)=>{ dragging=true; lastX=x; boxEl.classList.add('dragging'); };
+  const move=(x)=>{ if (!dragging) return; panByPixels(chart, x-lastX); lastX=x; };
+  const end =()=>{ dragging=false; boxEl.classList.remove('dragging'); };
+  canvas.addEventListener('mousedown', e=>{ e.preventDefault(); start(e.clientX); });
+  window.addEventListener('mousemove', e=>{ if(dragging){ e.preventDefault(); move(e.clientX);} });
+  window.addEventListener('mouseup', end);
+  canvas.addEventListener('mouseleave', end);
+  // wheel zoom (about cursor)
+  canvas.addEventListener('wheel', e=>{
+    e.preventDefault();
+    const factor = e.deltaY < 0 ? 1.2 : 1/1.2;
+    zoomAtPixel(chart, factor, e.clientX);
+  }, {passive:false});
+  // touch: 1-finger pan, 2-finger pinch+pan
+  let pinch=false, lastDist=0, lastMidX=0;
+  const dist=(t)=> Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+  const midx=(t)=> (t[0].clientX + t[1].clientX)/2;
+  canvas.addEventListener('touchstart', e=>{
+    if (e.touches.length===1){ e.preventDefault(); start(e.touches[0].clientX); }
+    else if (e.touches.length===2){ e.preventDefault(); pinch=true; lastDist=dist(e.touches); lastMidX=midx(e.touches); }
+  }, {passive:false});
+  canvas.addEventListener('touchmove', e=>{
+    if (pinch && e.touches.length===2){
+      e.preventDefault();
+      const d = dist(e.touches); const f = clamp(d/lastDist, 0.5, 2.0);
+      const mx = midx(e.touches);
+      zoomAtPixel(chart, f, mx);
+      panByPixels(chart, mx - lastMidX);
+      lastDist = d; lastMidX = mx;
+    } else if (dragging && e.touches.length===1){
+      e.preventDefault(); move(e.touches[0].clientX);
+    }
+  }, {passive:false});
+  canvas.addEventListener('touchend', e=>{ if (e.touches.length===0){ end(); pinch=false; } }, {passive:true});
+  // double-click reset
+  canvas.addEventListener('dblclick', ()=> resetRange(chart));
+}
+function resetRange(chart){
+  if (!chart.options.scales) chart.options.scales = {};
+  if (!chart.options.scales.x) chart.options.scales.x = {};
+  delete chart.options.scales.x.min;
+  delete chart.options.scales.x.max;
+  chart.update();
+}
+
+/* --- Deflection guides plugin: draw y=1.0 line + halving verticals --- */
+const deflectionGuides = {
+  id: 'deflectionGuides',
+  afterDatasetsDraw(chart, _args, _opts){
+    if (chart.canvas.id !== 'chartDefl') return;
+    const {ctx, chartArea:{top,bottom,left,right}, scales:{x,y}} = chart;
+    ctx.save();
+
+    // Horizontal y=1.0 pale grey dashed line
+    const y1 = y.getPixelForValue(1);
+    if (y1 >= top && y1 <= bottom){
+      ctx.strokeStyle = 'rgba(230,230,230,0.45)';
+      ctx.setLineDash([6,6]);
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(left, y1); ctx.lineTo(right, y1); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // Halving vertical lines (bright, dashed) with label
+    const halvings = ['2012-11-28','2016-07-09','2020-05-11','2024-04-20'];
+    ctx.strokeStyle = 'rgba(157,209,255,0.9)';
+    ctx.fillStyle   = 'rgba(157,209,255,0.95)';
+    ctx.setLineDash([4,4]);
+    ctx.lineWidth = 1;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.font = '12px system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,sans-serif';
+    for (const d of halvings){
+      const idx = chart.data.labels.indexOf(d);
+      if (idx < 0) continue;
+      const xPos = x.getPixelForValue(idx);
+      if (xPos < left || xPos > right) continue;
+      ctx.beginPath(); ctx.moveTo(xPos, top); ctx.lineTo(xPos, bottom); ctx.stroke();
+      ctx.fillText('Halving', xPos, top + 4);
+    }
+
+    ctx.restore();
+  }
+};
+Chart.register(deflectionGuides);
+
+// ---------- MAIN ----------
+async function load(){
+  document.getElementById('reload').disabled = true;
+  setStatus('Loading price history…');
+  try{
+    const {source, data} = await getPriceHistory();
+    setStatus('Loaded price history from '+source);
+
+    const priceMap = new Map(data.map(p => [p.date.toISOString().slice(0,10), p.price]));
+    const start = data[0].date.toISOString().slice(0,10);
+    const end = new Date().toISOString().slice(0,10);
+    const s = buildSupplySeries(start, end);
+
+    const labels=[], spot=[], model=[], defl=[], s2fSeries=[];
+    for (let i=0;i<s.dates.length;i++){
+      const d = s.dates[i]; const px = priceMap.get(d); if (px===undefined) continue;
+      const sf = s.s2f[i];
+      const mv = Math.exp(coefA*Math.log(sf) + coefB);
+      const mdl = mv / s.supply[i];
+      labels.push(d); spot.push(px); model.push(mdl); s2fSeries.push(sf); defl.push(px/mdl);
+    }
+    if (labels.length < 50) throw new Error('Aligned series too short; check network/CORS.');
+
+    // Tiles
+    const last = labels.length-1;
+    document.getElementById('tilePrice').textContent = '$'+fmt0.format(spot[last]);
+    document.getElementById('tileS2F').textContent = fmt4.format(s2fSeries[last]);
+    document.getElementById('tileModel').textContent = '$'+fmt0.format(model[last]);
+    document.getElementById('tileDefl').textContent = fmt.format(defl[last]);
+    document.getElementById('updated').textContent = 'Updated: '+new Date().toLocaleString();
+
+    // DESTROY OLD CHARTS
+    priceChart?.destroy(); deflChart?.destroy();
+
+    // Build charts
+    priceChart = new Chart(document.getElementById('chartPrice').getContext('2d'), {
+      type:'line',
+      data:{ labels, datasets:[
+        {label:'BTC/USD (spot)', data: spot, borderWidth:1, pointRadius:0},
+        {label:'S2F model (PlanB 2019)', data: model, borderWidth:1, pointRadius:0}
+      ]},
+      options:{ responsive:true, maintainAspectRatio:false,
+        scales:{ x:{ type:'category' }, y:{ type:'logarithmic', ticks:{ callback:v => '$'+fmt0.format(v) } } },
+        plugins:{ legend:{ labels:{ boxWidth:12 } } }
+      }
+    });
+
+    deflChart = new Chart(document.getElementById('chartDefl').getContext('2d'), {
+      type:'line',
+      data:{ labels, datasets:[{label:'Deflection (Price ÷ Model)', data:defl, borderWidth:1, pointRadius:0}] },
+      options:{ responsive:true, maintainAspectRatio:false,
+        scales:{ x:{ type:'category' }, y:{ ticks:{ callback:v => fmt.format(v) } } },
+        plugins:{ legend:{ labels:{ boxWidth:12 } }, deflectionGuides:{} } // register plugin for this chart
+      }
+    });
+
+    // Interactions
+    attachInteractions(priceChart, document.getElementById('priceBox'));
+    attachInteractions(deflChart,  document.getElementById('deflBox'));
+
+    // Keyboard & toolbar
+    const stepPx = 100;
+    window.onkeydown = (e)=>{
+      if (e.key==='ArrowLeft'){ panByPixels(priceChart, +stepPx); panByPixels(deflChart, +stepPx); }
+      if (e.key==='ArrowRight'){panByPixels(priceChart, -stepPx); panByPixels(deflChart, -stepPx); }
+    };
+    const centerX = (c)=>{ const x=c.scales.x; return (x.left + x.right)/2; };
+    const bind=(p, chart)=>{
+      document.getElementById(p+'PanLeft').onclick  = ()=> { panByPixels(chart, +stepPx); };
+      document.getElementById(p+'PanRight').onclick = ()=> { panByPixels(chart, -stepPx); };
+      document.getElementById(p+'ZoomIn').onclick   = ()=> { zoomAtPixel(chart, 1.2, centerX(chart)); };
+      document.getElementById(p+'ZoomOut').onclick  = ()=> { zoomAtPixel(chart, 1/1.2, centerX(chart)); };
+      document.getElementById(p+'Reset').onclick    = ()=> { resetRange(chart); };
+    };
+    bind('p', priceChart); bind('d', deflChart);
+
+    setStatus('Source: '+source+' • Points: '+labels.length);
+  } catch(e){
+    setStatus(e.message, true);
+    alert('Error loading data: '+e.message);
+  } finally {
+    document.getElementById('reload').disabled = false;
+  }
+}
+
+// Reload with new coefficients
+document.getElementById('reload').onclick = () => {
+  coefA = parseFloat(document.getElementById('coefA').value);
+  coefB = parseFloat(document.getElementById('coefB').value);
+  load();
+};
+
+/* --- Simple modal system for ⓘ buttons --- */
+const modalEl = document.getElementById('modalBackdrop');
+const modalTitle = document.getElementById('modalTitle');
+const modalContent = document.getElementById('modalContent');
+const modalClose = document.getElementById('modalClose');
+const MODALS = {
+  aboutPrice: {
+    title: 'About BTC vs S2F Model',
+    html: '<p>Overlay of BTC/USD with the Stock-to-Flow (S2F) model price (PlanB 2019). The model offers a slow-moving scarcity anchor; price can deviate widely above/below.</p><p><b>Tips:</b> Wheel/pinch to zoom, drag to pan, double-click or Reset to restore.</p>'
+  },
+  aboutDefl: {
+    title: 'About S2F Deflection',
+    html: '<p>Deflection = Price ÷ Model. &gt;1 = richer than the model anchor; &lt;1 = cheaper. Useful for comparing relative stretch/compression across cycles.</p><p>A pale dashed line marks 1.0; vertical lines mark halving events.</p>'
+  }
+};
+function openModal(key){ const d=MODALS[key]; if(!d) return; modalTitle.textContent=d.title; modalContent.innerHTML=d.html; modalEl.style.display='flex'; modalEl.setAttribute('aria-hidden','false'); }
+function closeModal(){ modalEl.style.display='none'; modalEl.setAttribute('aria-hidden','true'); }
+document.querySelectorAll('button[data-modal]').forEach(b=> b.addEventListener('click', ()=> openModal(b.getAttribute('data-modal'))));
+modalEl.addEventListener('click', (e)=>{ if (e.target===modalEl) closeModal(); });
+modalClose.addEventListener('click', closeModal);
+window.addEventListener('keydown', (e)=>{ if (e.key==='Escape') closeModal(); });
+
+// Initial load
+load();
+</script>
+</body>
+</html>
+
