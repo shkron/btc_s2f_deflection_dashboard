@@ -1,0 +1,5 @@
+# OS files
+.DS_Store
+
+# Anything in this folder should not be tracked by git
+/DO_NOT_TRACK
