@@ -7,8 +7,9 @@ Built with **Chart.js** and plain JavaScript (no server required).
 
 ## Features
 
-- **BTC vs S2F Model Chart**  
-  - Overlays historical BTC/USD price with the S2F model price (PlanB 2019 regression).  
+- **BTC vs S2F Model Chart**
+  - Overlays historical BTC/USD price with the S2F model price (PlanB 2019 regression).
+  - Optional **200-Week Moving Average** (200W MA) overlay that can be toggled on/off via checkbox.
   - Supports **drag-to-pan**, **wheel/pinch zoom**, **double-click reset**, and keyboard arrow panning.
 
 - **S2F Deflection Chart**  

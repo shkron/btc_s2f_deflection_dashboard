@@ -37,6 +37,7 @@
     <div class="toolbar">
       <span class="title">BTC vs S2F Model</span>
       <button class="icon ghost" aria-label="About BTC vs S2F" data-modal="aboutPrice">ⓘ</button>
+      <label class="small"><input type="checkbox" id="show200wma" checked> 200W MA</label>
       <button id="pPanLeft" class="ghost">← Pan</button>
       <button id="pPanRight" class="ghost">Pan →</button>
       <button id="pZoomIn">Zoom +</button>
@@ -301,7 +302,63 @@ const deflectionGuides = {
     ctx.restore();
   }
 };
-Chart.register(deflectionGuides);
+
+/* --- Current price highlight plugin --- */
+const currentPriceHighlight = {
+  id: 'currentPriceHighlight',
+  afterDatasetsDraw(chart, _args, _opts){
+    if (chart.canvas.id !== 'chartPrice') return;
+    const {ctx, chartArea:{top,bottom,left}, scales:{y}} = chart;
+
+    // Get the last spot price
+    const spotDataset = chart.data.datasets[0];
+    if (!spotDataset || !spotDataset.data || spotDataset.data.length === 0) return;
+
+    const lastPrice = spotDataset.data[spotDataset.data.length - 1];
+    const yPos = y.getPixelForValue(lastPrice);
+
+    if (yPos < top || yPos > bottom) return;
+
+    ctx.save();
+
+    // Draw semi-transparent pale blue bubble
+    ctx.fillStyle = 'rgba(157, 209, 255, 0.3)';
+    ctx.strokeStyle = 'rgba(157, 209, 255, 0.8)';
+    ctx.lineWidth = 1.5;
+
+    // Draw rounded rectangle bubble on the left side
+    const bubbleWidth = 60;
+    const bubbleHeight = 20;
+    const bubbleX = left - bubbleWidth - 5;
+    const bubbleY = yPos - bubbleHeight / 2;
+    const radius = 5;
+
+    ctx.beginPath();
+    ctx.moveTo(bubbleX + radius, bubbleY);
+    ctx.lineTo(bubbleX + bubbleWidth - radius, bubbleY);
+    ctx.arcTo(bubbleX + bubbleWidth, bubbleY, bubbleX + bubbleWidth, bubbleY + radius, radius);
+    ctx.lineTo(bubbleX + bubbleWidth, bubbleY + bubbleHeight - radius);
+    ctx.arcTo(bubbleX + bubbleWidth, bubbleY + bubbleHeight, bubbleX + bubbleWidth - radius, bubbleY + bubbleHeight, radius);
+    ctx.lineTo(bubbleX + radius, bubbleY + bubbleHeight);
+    ctx.arcTo(bubbleX, bubbleY + bubbleHeight, bubbleX, bubbleY + bubbleHeight - radius, radius);
+    ctx.lineTo(bubbleX, bubbleY + radius);
+    ctx.arcTo(bubbleX, bubbleY, bubbleX + radius, bubbleY, radius);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // Draw price text
+    ctx.fillStyle = 'rgba(157, 209, 255, 1)';
+    ctx.font = 'bold 10px system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('$' + fmt0.format(lastPrice), bubbleX + bubbleWidth / 2, yPos);
+
+    ctx.restore();
+  }
+};
+
+Chart.register(deflectionGuides, currentPriceHighlight);
 
 // ---------- MAIN ----------
 async function load(){
@@ -326,6 +383,21 @@ async function load(){
     }
     if (labels.length < 50) throw new Error('Aligned series too short; check network/CORS.');
 
+    // Calculate 200-week moving average (200 weeks = 1400 days)
+    const ma200w = [];
+    const windowSize = 1400;
+    for (let i = 0; i < spot.length; i++) {
+      if (i < windowSize - 1) {
+        ma200w.push(null);
+      } else {
+        let sum = 0;
+        for (let j = i - windowSize + 1; j <= i; j++) {
+          sum += spot[j];
+        }
+        ma200w.push(sum / windowSize);
+      }
+    }
+
     // Tiles
     const last = labels.length-1;
     document.getElementById('tilePrice').textContent = '$'+fmt0.format(spot[last]);
@@ -338,11 +410,35 @@ async function load(){
     priceChart?.destroy(); deflChart?.destroy();
 
     // Build charts
+    const show200wma = document.getElementById('show200wma').checked;
     priceChart = new Chart(document.getElementById('chartPrice').getContext('2d'), {
       type:'line',
-      data:{ labels, datasets:[
-        {label:'BTC/USD (spot)', data: spot, borderWidth:1, pointRadius:0},
-        {label:'S2F model (PlanB 2019)', data: model, borderWidth:1, pointRadius:0}
+      data:{ labels, datasets: [
+        {
+          label:'BTC/USD (spot)',
+          data: spot,
+          borderWidth:2,
+          pointRadius:0,
+          borderColor: 'rgb(54, 162, 235)',
+          backgroundColor: 'rgb(54, 162, 235)'
+        },
+        {
+          label:'S2F model (PlanB 2019)',
+          data: model,
+          borderWidth:2,
+          pointRadius:0,
+          borderColor: 'rgb(255, 99, 132)',
+          backgroundColor: 'rgb(255, 99, 132)'
+        },
+        {
+          label:'200W MA',
+          data: ma200w,
+          borderWidth:1,
+          pointRadius:0,
+          borderColor: 'rgb(255, 159, 64)',
+          backgroundColor: 'rgb(255, 159, 64)',
+          hidden: !show200wma
+        }
       ]},
       options:{ responsive:true, maintainAspectRatio:false,
         scales:{ x:{ type:'category' }, y:{ type:'logarithmic', ticks:{ callback:v => '$'+fmt0.format(v) } } },
@@ -393,6 +489,17 @@ document.getElementById('reload').onclick = () => {
   coefA = parseFloat(document.getElementById('coefA').value);
   coefB = parseFloat(document.getElementById('coefB').value);
   load();
+};
+
+// Toggle 200W MA overlay
+document.getElementById('show200wma').onchange = (e) => {
+  if (priceChart) {
+    const maDataset = priceChart.data.datasets[2]; // 200W MA is the 3rd dataset
+    if (maDataset) {
+      maDataset.hidden = !e.target.checked;
+      priceChart.update();
+    }
+  }
 };
 
 /* --- Simple modal system for ⓘ buttons --- */
